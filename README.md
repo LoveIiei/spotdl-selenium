@@ -1,16 +1,29 @@
-# OwnSpotifyDownload
+# Spotify to MP3 Downloader
 
-# For Study Purposes Only !!!
+A Python automation script that mimics `spotdl` functionality without using the Spotify API. This tool scrapes song names from a Spotify playlist URL using Selenium and downloads high-quality audio from YouTube using `yt-dlp`.
 
-I wrote my own version of Spotdl using python
+**⚠️ Disclaimer: This project is for educational and study purposes only.**
 
-# How to use: 
+## Key Features
+* **No API Keys Required:** Uses Web Scraping (Selenium) to fetch playlist data.
+* **High Efficiency:** Use `yt-dlp` for fast, reliable downloads.
+* **Smart Metadata:** Automatically embeds thumbnails, artist, and title tags into the MP3s.
+* **Clean UI:** Uses `tqdm` for a professional progress bar and redirects internal warnings to a log file.
 
-Use pip install requirements.txt to download all libraries used in the program
+## Prerequisites
 
-Need to have a chromedriver(default) or edgedriver(need a change in the code)
+* **Python 3.8+**
+* **Firefox driver** (The script automatically manages the driver version)
+* **FFmpeg** (Must be installed and added to your system PATH for audio conversion)
 
-Remember to have your local ssl certificate ready
+## Installation
 
-You can either run the program or do 'python3 Spotifydl.py https://xxxxxxx', the program accepts link in bash.
-
+1.  **Clone the repository** (or create a new folder).
+2.  **Install dependencies**:
+    ```bash
+    pip install requirements.txt
+    ```
+3.  **Verify FFmpeg**:
+    Type `ffmpeg -version` in your terminal. If it's not recognized, install it manually.
+4.  **Download a browser driver as per selenium webpage**
+    ***This must be DONE*** Please download firefox driver at [driver](https://github.com/mozilla/geckodriver)
