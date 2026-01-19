@@ -1,104 +1,89 @@
 import os
 import time
-from tqdm import tqdm
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.firefox.service import Service
-from webdriver_manager.firefox import GeckoDriverManager
-
 import yt_dlp
+from tqdm import tqdm
+from playwright.sync_api import sync_playwright
 
-def setup_driver():
-    """Initializes a headless Firefox driver."""
-    options = webdriver.FirefoxOptions()
-    #options.add_argument("--headless")  # Run without opening a window
-    options.add_argument("--disable-gpu")
-    options.add_argument("--log-level=3")  # Suppress console logs
-    
-    # helper to manage driver version automatically
-    service = Service(GeckoDriverManager().install())
-    return webdriver.Firefox(service=service, options=options)
-
-def scrape_spotify_playlist(url):
-    """Scrapes song names from a Spotify playlist URL."""
-    driver = setup_driver()
-    song_list = []
-    
-    print(f"Fetching playlist: {url}...")
-    try:
-        driver.get(url)
-        wait = WebDriverWait(driver, 10)
-        
-        # Wait for the tracklist to load
-        # Note: Spotify classes (like 'Type__TypeElement...') are hashed and change often.
-        # It is often safer to look for the container having role="row" or specific aria-labels.
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[data-testid='tracklist-row']")))
-
-        last_height = driver.execute_script("return document.body.scrollHeight")
-        
-        while True:
-            # Scroll down to bottom
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1.5) # Wait for lazy loading
-            
-            # Calculate new scroll height and compare with last scroll height
-            new_height = driver.execute_script("return document.body.scrollHeight")
-            if new_height == last_height:
-                break
-            last_height = new_height
-
-        # Parse the page source after full scroll
-        
-        # We try to find elements with the specific track name testid
-        tracks = driver.find_elements(By.CSS_SELECTOR, "div[data-testid='tracklist-row']")
-        
-        print(f"Found {len(tracks)} rows. Extracting names...")
-
-        for track in tracks:
-            try:
-                # This selector targets the song title specifically inside the row
-                title_element = track.find_element(By.CSS_SELECTOR, "div[dir='auto']")
-                song_name = title_element.text
-                
-                # artist_element = track.find_element(By.CSS_SELECTOR, "a[href*='/artist/']") 
-                
-                if song_name and song_name not in song_list:
-                    song_list.append(song_name)
-            except Exception:
-                continue
-
-    except Exception as e:
-        print(f"Error scraping Spotify: {e}")
-    finally:
-        driver.quit()
-        
-    return song_list
-
+# --- 1. Logger & Config (Same as before) ---
 class FileLogger:
     def __init__(self):
-        # Clear the log file on new run (optional)
         with open("download_log.txt", "w") as f:
             f.write("--- Download Session Log ---\n")
 
-    def debug(self, msg):
-        # We don't want to see debug info, just write to file
-        with open("download_log.txt", "a", encoding="utf-8") as f:
-            f.write(f"[DEBUG] {msg}\n")
+    def debug(self, msg): pass
 
     def warning(self, msg):
-        # This catches the specific "web_safari" warning you mentioned
         with open("download_log.txt", "a", encoding="utf-8") as f:
             f.write(f"[WARNING] {msg}\n")
 
     def error(self, msg):
-        # We generally want to see errors in console, but we can also log them
-        print(f"\n[ERROR] {msg}") 
         with open("download_log.txt", "a", encoding="utf-8") as f:
             f.write(f"[ERROR] {msg}\n")
 
+# --- 2. The New Playwright Scraper ---
+def scrape_spotify(url):
+    song_list = []
+    print("🕵️  Launching Playwright (Headless)...")
+    
+    with sync_playwright() as p:
+        # Launch browser (headless=True is faster)
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        
+        print(f"🌍 Going to {url}...")
+        page.goto(url)
+        
+        # Playwright auto-waits for the tracklist to exist.
+        # We look for the tracklist row.
+        try:
+            page.locator("div[data-testid='tracklist-row']").first.wait_for(timeout=10000)
+        except:
+            print("⚠️ Could not load tracklist. Is the link valid?")
+            browser.close()
+            return []
+
+        # --- Infinite Scroll Logic ---
+        print("📜 Scrolling to load all songs...")
+        last_height = page.evaluate("document.body.scrollHeight")
+        
+        while True:
+            # Scroll to bottom
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            # Wait a bit for Spotify to fetch new rows (Playwright's version of sleep)
+            page.wait_for_timeout(1500) 
+            
+            new_height = page.evaluate("document.body.scrollHeight")
+            if new_height == last_height:
+                break
+            last_height = new_height
+            
+        # --- Extraction ---
+        # Locate all rows
+        rows = page.locator("div[data-testid='tracklist-row']")
+        count = rows.count()
+        print(f"✅ Found {count} tracks.")
+
+        # Iterate through handles
+        for i in range(count):
+            try:
+                # Scoping: Get the i-th row
+                row = rows.nth(i)
+                
+                # Inside that row, find the title div
+                # We use specific attributes to be precise
+                title_locator = row.locator("div[dir='auto']").first
+                
+                title = title_locator.text_content()
+                if title and title not in song_list:
+                    song_list.append(title)
+            except Exception as e:
+                continue
+        
+        browser.close()
+        
+    return song_list
+
+# --- 3. The Downloader (Same as before) ---
 def download_tracks(song_list, download_folder):
     if not os.path.exists(download_folder):
         os.makedirs(download_folder)
@@ -107,14 +92,9 @@ def download_tracks(song_list, download_folder):
         'format': 'bestaudio/best',
         'outtmpl': f'{download_folder}/%(title)s.%(ext)s',
         'writethumbnail': True,
-        
-        # 2. Inject our custom logger
         'logger': FileLogger(),
-        
-        # 3. Suppress yt-dlp's default console output so it doesn't break our progress bar
-        'quiet': True, 
-        'no_warnings': True, 
-        
+        'quiet': True,
+        'no_warnings': True,
         'postprocessors': [
             {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'},
             {'key': 'EmbedThumbnail'},
@@ -122,35 +102,26 @@ def download_tracks(song_list, download_folder):
         ],
     }
 
-    # 4. Wrap the loop in tqdm for the visual progress bar
-    # ncols=100 makes the bar fixed width, nice and clean
-    # unit="song" changes the counter to "1/10 songs" instead of "it/s"
-    print(f"Logs are being saved to: {os.getcwd()}/download_log.txt")
+    print(f"📂 Saving to: {download_folder}")
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        # We use 'pbar' so we can update the description dynamically
         pbar = tqdm(song_list, unit="song", ncols=100)
-        
         for song in pbar:
-            # Update the text next to the bar to show current song
-            pbar.set_description(f"Processing: {song[:20]}...") 
-            
+            pbar.set_description(f"Processing: {song[:20]:<20}")
             try:
-                # We don't need print() anymore, the bar handles the visuals
-                ydl.download([f"ytsearch1:{song} Audio"]) 
-            except Exception as e:
-                # Use pbar.write() to print without breaking the bar layout
-                pbar.write(f"Failed: {song}")
+                ydl.download([f"ytsearch1:{song} Audio"])
+            except Exception:
+                pbar.write(f"❌ Failed: {song}")
 
+# --- 4. Main Execution ---
 if __name__ == "__main__":
-    link = input("What's the Spotify link: ")
-    folder = os.path.join(os.getcwd(), "spotifydl")
+    link = input("🔗 Spotify Playlist Link: ")
+    folder = os.path.join(os.getcwd(), "downloads")
     
-    songs = scrape_spotify_playlist(link)
+    songs = scrape_spotify(link)
     
-    if songs: 
-        print(f"Successfully scraped {len(songs)} songs.")
+    if songs:
         download_tracks(songs, folder)
-        print("All operations finished.")
+        print("\n✨ All operations finished!")
     else:
-        print("No songs found. Check your CSS selectors or the link.")
+        print("⚠️ No songs found.")
